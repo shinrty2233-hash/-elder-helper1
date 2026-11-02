@@ -1,0 +1,821 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>長輩選舉趕場助手</title>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Leaflet CSS & JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans TC", sans-serif;
+      touch-action: manipulation;
+    }
+    .num-pin {
+      border: 3px solid white;
+      border-radius: 9999px;
+      font-weight: 900;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+      color: white;
+      transition: transform 0.2s;
+    }
+    .num-pin.home {
+      background-color: #16a34a !important;
+    }
+    .num-pin.expired {
+      background-color: #94a3b8 !important;
+    }
+    #map {
+      min-height: 320px;
+    }
+    @media (min-width: 1024px) {
+      #map {
+        min-height: 100%;
+      }
+    }
+    /* 閃爍獎勵特效 */
+    @keyframes bounce-scale {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.15); }
+    }
+    .badge-pop {
+      animation: bounce-scale 0.3s ease-in-out;
+    }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-900 min-h-screen flex flex-col text-lg">
+
+  <!-- 頂部標題與戰利品計數器 -->
+  <header class="bg-orange-600 text-white shadow-md px-4 py-3 shrink-0 flex flex-wrap items-center justify-between gap-3">
+    <div class="flex items-center gap-2">
+      <span class="text-3xl">🚶‍♂️</span>
+      <div>
+        <h1 class="text-xl md:text-2xl font-black tracking-wide leading-tight">長輩選舉趕場助手</h1>
+        <p class="text-xs text-orange-100 font-bold">長輩慢步調・每日從家出發・30元合規物資累計</p>
+      </div>
+    </div>
+
+    <!-- 30元物資戰利品儀表板 -->
+    <div class="flex items-center gap-3 bg-orange-700/80 px-3.5 py-1.5 rounded-2xl border border-orange-400">
+      <div class="text-left">
+        <div class="text-xs text-orange-200 font-bold">🎁 累積打卡物資</div>
+        <div class="text-base font-black flex items-center gap-1.5">
+          <span id="prize-count" class="text-amber-300 text-xl font-black">0</span> 份
+          <span class="text-xs text-orange-200">(約 $<span id="prize-value" class="text-amber-300 font-black">0</span> 元)</span>
+        </div>
+      </div>
+      <button onclick="clearAllData()" class="text-xs bg-orange-800 hover:bg-orange-900 text-orange-100 px-2.5 py-1.5 rounded-xl border border-orange-500 transition font-bold">
+        清除打卡
+      </button>
+    </div>
+  </header>
+
+  <!-- 主內容區 -->
+  <main class="flex-1 max-w-7xl w-full mx-auto p-3 md:p-5 flex flex-col lg:flex-row gap-5 overflow-hidden">
+    
+    <!-- 左側欄：控制項、表單、行程動線與歷史清單 -->
+    <div class="w-full lg:w-5/12 flex flex-col gap-4 overflow-y-auto pr-0 lg:pr-1">
+
+      <!-- 1. 步行速度與起點（家）設定 -->
+      <section class="bg-emerald-50 rounded-2xl p-4 border-2 border-emerald-300 shadow-sm space-y-3">
+        <div class="flex items-center justify-between flex-wrap gap-2">
+          <h2 class="text-base font-black text-emerald-950 flex items-center gap-1.5">
+            <span>🏠 出發起點 (家)</span>
+          </h2>
+          <span class="text-xs text-emerald-800 font-bold bg-emerald-100 px-2.5 py-1 rounded-lg">長輩散步步調估算</span>
+        </div>
+        
+        <div class="flex gap-1.5">
+          <input type="text" id="ipt-home" placeholder="輸入家裡地址或點擊右側地圖"
+            class="flex-1 p-2.5 bg-white border border-emerald-300 rounded-xl text-sm font-bold focus:border-emerald-600 outline-none">
+          <button type="button" onclick="searchHomeAddress()" class="px-3 py-2 bg-emerald-800 hover:bg-emerald-900 text-white text-xs font-black rounded-xl shrink-0">
+            搜尋
+          </button>
+          <button type="button" onclick="locateUserPosition()" class="px-3 py-2 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-black rounded-xl shrink-0">
+            📍 GPS
+          </button>
+        </div>
+        <p id="updated-at" class="text-xs text-slate-500 font-bold">資料更新時間：讀取中…</p>
+        <p id="home-status" class="text-xs text-emerald-700 font-bold truncate">目前起點：內壢高中 (預設)</p>
+      </section>
+
+
+      <!-- 3. 近期與今日行程 (按日分組 + 跨日重回家) -->
+      <section class="space-y-3">
+        <div class="flex items-center justify-between px-1">
+          <h2 class="text-lg font-black text-slate-800">📋 趕場行程動線</h2>
+          <span class="text-xs text-slate-500 font-bold">超時30分自動淡化</span>
+        </div>
+
+        <div id="events-container" class="space-y-5">
+          <!-- 動態載入各天卡片與路徑分析 -->
+        </div>
+      </section>
+
+      <!-- 4. 歷史紀錄專區 (過期昨天的活動自動移到這裡) -->
+      <section class="mt-2 bg-slate-200/70 border-2 border-slate-300 rounded-2xl p-3.5 space-y-2">
+        <div class="flex items-center justify-between cursor-pointer select-none" onclick="toggleHistorySection()">
+          <div class="flex items-center gap-1.5 font-black text-slate-700 text-sm">
+            <span>📜 過去歷史紀錄</span>
+            <span id="history-badge" class="bg-slate-400 text-white text-xs px-2 py-0.5 rounded-full font-bold">0</span>
+          </div>
+          <span id="history-arrow" class="text-slate-600 font-black text-sm">▼ 點擊展開</span>
+        </div>
+        <div id="history-list" class="space-y-2 hidden pt-2">
+          <!-- 動態載入歷史活動 -->
+        </div>
+      </section>
+
+    </div>
+
+    <!-- 右側欄：大地圖 (各天專用顏色、畫出當天完整回家路線) -->
+    <div class="w-full lg:w-7/12 flex flex-col h-[420px] lg:h-auto rounded-3xl overflow-hidden border-2 border-slate-300 shadow-md relative bg-white">
+      <div id="map" class="w-full h-full z-10"></div>
+
+      <!-- 地圖圖例與天數線條顏色標記 -->
+      <div id="map-legend" class="absolute top-3 right-3 z-[400] bg-white/95 backdrop-blur-sm p-3 rounded-xl border border-slate-200 shadow text-xs space-y-1.5 font-bold pointer-events-none max-w-[210px]">
+        <div class="flex items-center gap-1.5"><span class="w-3.5 h-3.5 rounded-full bg-emerald-600 inline-block"></span> 綠色：起點與家 🏠</div>
+        <div id="legend-days" class="space-y-1 pt-1 border-t border-slate-200">
+          <!-- 動態產生各天線條顏色說明 -->
+        </div>
+      </div>
+
+      <!-- 路線計算狀態指示條 -->
+      <div id="routing-spinner" class="absolute bottom-3 left-3 z-[400] bg-slate-900/90 text-white text-xs px-3 py-1.5 rounded-xl font-bold flex items-center gap-2 hidden shadow">
+        <span class="animate-spin">🔄</span>
+        <span>計算長輩步行路線與紅綠燈緩衝中...</span>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- 提示浮動框 -->
+  <div id="msg-box" class="fixed bottom-6 left-1/2 -translate-x-1/2 bg-slate-900 text-white text-sm font-black px-5 py-2.5 rounded-full shadow-2xl transition-opacity opacity-0 pointer-events-none z-50"></div>
+
+  <script>
+    const EVENTS_STORAGE_KEY = 'election_events_v3';
+    const HOME_STORAGE_KEY = 'election_home_v3';
+
+    // 每天路徑的色盤 (鮮豔對比高)
+    const DAY_COLORS = ['#2563eb', '#d97706', '#9333ea', '#db2777', '#0891b2', '#4f46e5'];
+
+    // 固定為長輩散步步調 (每分鐘 45 公尺，時速約 2.7 km)
+    const ELDER_METERS_PER_MIN = 45;
+    
+    let homePos = null;
+    let events = [];
+    let map = null;
+    let markersLayer = null;
+    let routesLayer = null;
+    let tempPickerMarker = null;
+    let isHistoryExpanded = false;
+
+    window.addEventListener('DOMContentLoaded', () => {
+      initMap();
+      loadHomePosition();
+      loadEvents();
+
+      // 每分鐘自動重新檢查過期狀態
+      setInterval(() => {
+        renderAll();
+      }, 60000);
+    });
+
+    // 計算長輩步行時間 (純計算：每45米約1分，外加等紅綠燈過路口每500公尺+1.5分鐘緩衝)
+    function calcWalkMinutes(meters) {
+      if (!meters || meters <= 0) return 0;
+      const baseWalkMins = meters / ELDER_METERS_PER_MIN;
+      const trafficBuffer = Math.ceil((meters / 500) * 1.5);
+      return Math.max(1, Math.round(baseWalkMins + trafficBuffer));
+    }
+
+    function setDefaultFormTime() {
+      const now = new Date(Date.now() + 30 * 60000);
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const day = String(now.getDate()).padStart(2, '0');
+      const hours = String(now.getHours()).padStart(2, '0');
+      const mins = String(now.getMinutes()).padStart(2, '0');
+      document.getElementById('ipt-datetime').value = `${year}-${month}-${day}T${hours}:${mins}`;
+    }
+
+    // 地圖初始化
+    function initMap() {
+      map = L.map('map', { zoomControl: true }).setView([24.9654, 121.2250], 14);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; OpenStreetMap'
+      }).addTo(map);
+
+      routesLayer = L.layerGroup().addTo(map);
+      markersLayer = L.layerGroup().addTo(map);
+
+      map.on('click', async (e) => {
+        const { lat, lng } = e.latlng;
+        let placeName = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+        try {
+          const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`);
+          const data = await res.json();
+          if (data?.display_name) placeName = data.display_name.split(',')[0];
+        } catch (err) {}
+
+        const popupContent = document.createElement('div');
+        popupContent.className = 'p-1 text-center space-y-2';
+        popupContent.innerHTML = `
+          <div class="font-black text-sm text-slate-800">${escapeHtml(placeName)}</div>
+          <div class="flex gap-2">
+            <button id="btn-pick-home" class="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg shadow">
+              🏠 設為出發起點(家)
+            </button>
+
+          </div>
+        `;
+
+        L.popup()
+          .setLatLng([lat, lng])
+          .setContent(popupContent)
+          .openOn(map);
+
+        setTimeout(() => {
+          document.getElementById('btn-pick-home')?.addEventListener('click', () => {
+            setHomePosition(lat, lng, placeName);
+            map.closePopup();
+            showMsg('🏠 已更新出發起點 (家)！');
+          });
+        }, 50);
+      });
+    }
+
+    // 起點(家)資料
+    function loadHomePosition() {
+      const saved = localStorage.getItem(HOME_STORAGE_KEY);
+      if (saved) {
+        try { homePos = JSON.parse(saved); } catch (e) { homePos = null; }
+      }
+      if (!homePos) {
+        homePos = { name: '內壢高中 (預設家)', lat: 24.9776, lng: 121.2566 };
+      }
+      updateHomeDisplay();
+    }
+
+    function setHomePosition(lat, lng, name) {
+      homePos = { name, lat, lng };
+      localStorage.setItem(HOME_STORAGE_KEY, JSON.stringify(homePos));
+      updateHomeDisplay();
+      renderAll();
+    }
+
+    function updateHomeDisplay() {
+      document.getElementById('ipt-home').value = homePos.name;
+      document.getElementById('home-status').textContent = `目前起點：${homePos.name}`;
+    }
+
+    function locateUserPosition() {
+      if (!navigator.geolocation) {
+        showMsg('裝置未開啟 GPS 定位');
+        return;
+      }
+      showMsg('🔍 定位目前位置中...');
+      navigator.geolocation.getCurrentPosition(
+        async (pos) => {
+          const lat = pos.coords.latitude;
+          const lng = pos.coords.longitude;
+          let label = '我的目前位置';
+          try {
+            const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18`);
+            const data = await res.json();
+            if (data?.display_name) label = data.display_name.split(',')[0];
+          } catch(e) {}
+          setHomePosition(lat, lng, label);
+          map.setView([lat, lng], 15);
+          showMsg('✅ 已將目前位置設為起點！');
+        },
+        () => showMsg('無法定位，請搜尋地址或點選地圖'),
+        { enableHighAccuracy: true, timeout: 8000 }
+      );
+    }
+
+    async function searchHomeAddress() {
+      const q = document.getElementById('ipt-home').value.trim();
+      if (!q) return;
+      showMsg('🔍 搜尋家裡地址中...');
+      try {
+        const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&countrycodes=tw&limit=1`);
+        const data = await res.json();
+        if (data && data.length > 0) {
+          const lat = parseFloat(data[0].lat);
+          const lng = parseFloat(data[0].lon);
+          setHomePosition(lat, lng, q);
+          map.setView([lat, lng], 15);
+          showMsg('✅ 起點地址已設定！');
+        } else {
+          showMsg('找不到該地址，請直接點地圖');
+        }
+      } catch (e) {
+        showMsg('搜尋逾時，請直接點地圖');
+      }
+    }
+
+    // 活動地點輸入
+    function setEventFormLocation(lat, lng, label) {
+      document.getElementById('ipt-lat').value = lat;
+      document.getElementById('ipt-lng').value = lng;
+      document.getElementById('ipt-location').value = label;
+
+      if (tempPickerMarker) map.removeLayer(tempPickerMarker);
+      tempPickerMarker = L.marker([lat, lng]).addTo(map);
+      document.getElementById('geo-hint').textContent = `📍 已選擇：${label}`;
+    }
+
+    async function searchEventAddress() {
+      const q = document.getElementById('ipt-location').value.trim();
+      if (!q) {
+        showMsg('請輸入活動地址');
+        return;
+      }
+      showMsg('🔍 搜尋地點中...');
+      try {
+        const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&countrycodes=tw&limit=1`);
+        const data = await res.json();
+        if (data && data.length > 0) {
+          const lat = parseFloat(data[0].lat);
+          const lng = parseFloat(data[0].lon);
+          setEventFormLocation(lat, lng, q);
+          map.setView([lat, lng], 15);
+          showMsg('✅ 找到地點！');
+        } else {
+          showMsg('查無地點，請在地圖點擊選取');
+        }
+      } catch (e) {
+        showMsg('連線逾時，請直接點地圖');
+      }
+    }
+
+    const ATT_KEY = 'election_attended_v1';
+    function getAttMap() { try { return JSON.parse(localStorage.getItem(ATT_KEY)) || {}; } catch (e) { return {}; } }
+    async function loadEvents() {
+      let att = getAttMap();
+      try {
+        const res = await fetch('events.json?t=' + Date.now(), { cache: 'no-store' });
+        const d = await res.json();
+        events = (d.events || []).map(e => ({ ...e, attended: !!att[e.id] }));
+        document.getElementById('updated-at').textContent = '資料更新時間：' + (d.updated || '未知');
+      } catch (e) {
+        events = [];
+        document.getElementById('updated-at').textContent = '⚠️ 讀不到最新行程，請確認網路後重新整理';
+      }
+      renderAll();
+    }
+    function saveEvents() {
+      const att = {};
+      events.forEach(e => { if (e.attended) att[e.id] = true; });
+      localStorage.setItem(ATT_KEY, JSON.stringify(att));
+      updatePrizeSummary();
+    }
+
+
+
+    // 打卡切換：有去 / 沒去
+    function toggleAttendance(id) {
+      const target = events.find(e => e.id === id);
+      if (target) {
+        target.attended = !target.attended;
+        saveEvents();
+        renderAll();
+        if (target.attended) {
+          showMsg('🎁 讚！累積合規 30 元宣導物資 +1 份！');
+          const pBadge = document.getElementById('prize-count');
+          pBadge.classList.add('badge-pop');
+          setTimeout(() => pBadge.classList.remove('badge-pop'), 400);
+        }
+      }
+    }
+
+    // 更新 30 元宣導品統計儀表
+    function updatePrizeSummary() {
+      const count = events.filter(e => e.attended).length;
+      document.getElementById('prize-count').textContent = count;
+      document.getElementById('prize-value').textContent = count * 30;
+    }
+
+    function clearAllData() {
+      if (window.confirm('確定要清除自己的打卡紀錄嗎？')) {
+        localStorage.removeItem(ATT_KEY);
+        events.forEach(e => e.attended = false);
+        updatePrizeSummary();
+        renderAll();
+      }
+    }
+
+    // 判斷邏輯：
+    // 1. 是否已跨日過去 (日期小於今天的 00:00) -> 進入歷史專區
+    function isPastDay(datetimeStr) {
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const evDate = new Date(datetimeStr);
+      return evDate < todayStart;
+    }
+
+    // 2. 超過 30 分鐘自動淡化
+    function isEventExpired(datetimeStr) {
+      if (!datetimeStr) return false;
+      const eventTime = new Date(datetimeStr).getTime();
+      return (Date.now() - eventTime) > (30 * 60 * 1000);
+    }
+
+    function getDateKey(datetimeStr) {
+      return datetimeStr.split('T')[0];
+    }
+
+    function formatDayHeader(dateKey) {
+      const parts = dateKey.split('-');
+      const d = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+      const m = d.getMonth() + 1;
+      const day = d.getDate();
+      const weekDays = ['日', '一', '二', '三', '四', '五', '六'];
+      const week = weekDays[d.getDay()];
+
+      const today = new Date();
+      const isToday = today.toISOString().split('T')[0] === dateKey;
+      return `${m}月${day}日 (星期${week}) ${isToday ? '⭐️【今日行程】' : ''}`;
+    }
+
+    function formatTimeOnly(datetimeStr) {
+      const d = new Date(datetimeStr);
+      const h = String(d.getHours()).padStart(2, '0');
+      const min = String(d.getMinutes()).padStart(2, '0');
+      return `${h}:${min}`;
+    }
+
+    // 步行路線快取與呼叫
+    const routeCache = {};
+    async function getWalkingRouteGeometry(p1, p2) {
+      const key = `${p1.lat.toFixed(4)},${p1.lng.toFixed(4)}-${p2.lat.toFixed(4)},${p2.lng.toFixed(4)}`;
+      if (routeCache[key]) return routeCache[key];
+
+      try {
+        const url = `https://router.project-osrm.org/route/v1/walking/${p1.lng},${p1.lat};${p2.lng},${p2.lat}?overview=full&geometries=geojson`;
+        const res = await fetch(url);
+        const data = await res.json();
+        if (data.code === 'Ok' && data.routes && data.routes.length > 0) {
+          const route = data.routes[0];
+          const result = {
+            distance: route.distance,
+            geometry: route.geometry.coordinates.map(c => [c[1], c[0]])
+          };
+          routeCache[key] = result;
+          return result;
+        }
+      } catch (e) {}
+
+      // 降級直線
+      const dist = getStraightDistance(p1.lat, p1.lng, p2.lat, p2.lng);
+      const fallback = {
+        distance: dist,
+        geometry: [[p1.lat, p1.lng], [p2.lat, p2.lng]]
+      };
+      routeCache[key] = fallback;
+      return fallback;
+    }
+
+    // 核心渲染：分組、每日各自回家、繪製各天線條
+    async function renderAll() {
+      updatePrizeSummary();
+
+      // 先將活動依時間排序
+      events.sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
+
+      // 分離「今日與未來行程」與「跨日已過去的歷史活動」
+      const activeEvents = [];
+      const historyEvents = [];
+
+      events.forEach(ev => {
+        if (isPastDay(ev.datetime)) {
+          historyEvents.push(ev);
+        } else {
+          activeEvents.push(ev);
+        }
+      });
+
+      renderHistorySection(historyEvents);
+
+      markersLayer.clearLayers();
+      routesLayer.clearLayers();
+
+      const allBounds = [];
+
+      // 繪製家 🏠
+      if (homePos) {
+        const homeIcon = L.divIcon({
+          className: '',
+          html: `<div class="num-pin home w-10 h-10 text-xl shadow-lg">🏠</div>`,
+          iconSize: [40, 40],
+          iconAnchor: [20, 20]
+        });
+        const m = L.marker([homePos.lat, homePos.lng], { icon: homeIcon })
+          .bindPopup(`<b>出發起點與家</b><br>${escapeHtml(homePos.name)}`);
+        markersLayer.addLayer(m);
+        allBounds.push([homePos.lat, homePos.lng]);
+      }
+
+      // 將進行中的活動按「日期」分組
+      const groupedByDay = {};
+      activeEvents.forEach(ev => {
+        const dk = getDateKey(ev.datetime);
+        if (!groupedByDay[dk]) groupedByDay[dk] = [];
+        groupedByDay[dk].push(ev);
+      });
+
+      const dayKeys = Object.keys(groupedByDay);
+      const container = document.getElementById('events-container');
+      const legendDays = document.getElementById('legend-days');
+      legendDays.innerHTML = '';
+
+      if (dayKeys.length === 0) {
+        container.innerHTML = `
+          <div class="bg-white rounded-2xl p-6 text-center text-slate-400 font-bold border-2 border-dashed border-slate-300">
+            目前沒有即將進行的活動，請在上方登記！
+          </div>
+        `;
+        if (allBounds.length > 0) map.fitBounds(allBounds, { maxZoom: 15 });
+        return;
+      }
+
+      document.getElementById('routing-spinner').classList.remove('hidden');
+
+      let allHtml = '';
+
+      // 逐日處理
+      for (let dayIndex = 0; dayIndex < dayKeys.length; dayIndex++) {
+        const dateKey = dayKeys[dayIndex];
+        const dayEvents = groupedByDay[dateKey];
+        const dayColor = DAY_COLORS[dayIndex % DAY_COLORS.length];
+
+        // 圖例加上天數顏色
+        legendDays.innerHTML += `
+          <div class="flex items-center gap-1.5">
+            <span class="w-4 h-1.5 rounded inline-block" style="background-color: ${dayColor};"></span>
+            <span class="truncate">${formatDayHeader(dateKey).split(' ')[0]} 路線</span>
+          </div>
+        `;
+
+        allHtml += `
+          <div class="bg-slate-50 border-2 rounded-3xl p-3.5 space-y-3" style="border-color: ${dayColor}55;">
+            <div class="flex items-center justify-between pb-1 border-b" style="border-color: ${dayColor}40;">
+              <span class="font-black text-base md:text-lg flex items-center gap-2" style="color: ${dayColor};">
+                📅 ${formatDayHeader(dateKey)}
+              </span>
+              <span class="text-xs font-black bg-white px-2.5 py-1 rounded-full border shadow-sm" style="color: ${dayColor};">
+                共 ${dayEvents.length} 場次
+              </span>
+            </div>
+        `;
+
+        // 該日動線點序列：家 ➔ 場1 ➔ 場2 ... ➔ 回家
+        const waypoints = [];
+        if (homePos) waypoints.push({ name: '起點(家)', isHome: true, lat: homePos.lat, lng: homePos.lng });
+        dayEvents.forEach((ev, i) => {
+          waypoints.push({ ...ev, isHome: false, dayIndex: i + 1 });
+        });
+        if (homePos) waypoints.push({ name: '平安回家', isHome: true, lat: homePos.lat, lng: homePos.lng });
+
+        // 計算各段路線
+        const legRoutes = [];
+        for (let w = 0; w < waypoints.length - 1; w++) {
+          const from = waypoints[w];
+          const to = waypoints[w + 1];
+          const route = await getWalkingRouteGeometry(from, to);
+          legRoutes.push(route);
+
+          if (route && route.geometry) {
+            const polyline = L.polyline(route.geometry, {
+              color: dayColor,
+              weight: 5,
+              opacity: 0.85,
+              dashArray: (w === 0 || w === waypoints.length - 2) ? '6, 6' : null
+            }).bindPopup(`<b>${formatDayHeader(dateKey).split(' ')[0]} 步行動線</b><br>距離約 ${formatDistance(route.distance)}<br>長輩步行約需 ${calcWalkMinutes(route.distance)} 分鐘`);
+            routesLayer.addLayer(polyline);
+          }
+        }
+
+        // 該日第一段：家 ➔ 第 1 場
+        if (homePos && legRoutes.length > 0) {
+          const homeToFirst = legRoutes[0];
+          const mins = calcWalkMinutes(homeToFirst.distance);
+          allHtml += `
+            <div class="bg-emerald-50 border-2 border-dashed border-emerald-400 rounded-2xl p-2.5 text-xs md:text-sm font-bold flex items-center justify-between">
+              <div>
+                <span class="text-emerald-900 font-black">🏠 從家出發 ➔ 第 1 場：</span>
+                <span class="text-emerald-800">約 <b>${formatDistance(homeToFirst.distance)}</b> (慢走約 ${mins} 分鐘)</span>
+              </div>
+              <a href="https://www.google.com/maps/dir/?api=1&origin=${homePos.lat},${homePos.lng}&destination=${dayEvents[0].lat},${dayEvents[0].lng}&travelmode=walking" target="_blank"
+                class="text-xs bg-emerald-700 hover:bg-emerald-800 text-white font-black px-2.5 py-1.5 rounded-lg shrink-0 shadow">
+                導航
+              </a>
+            </div>
+          `;
+        }
+
+        // 繪製該日各場次卡片與 Pin
+        for (let i = 0; i < dayEvents.length; i++) {
+          const ev = dayEvents[i];
+          const expired = isEventExpired(ev.datetime);
+          allBounds.push([ev.lat, ev.lng]);
+
+          // 地圖 Pin
+          const evPinHtml = `
+            <div class="num-pin ${expired ? 'expired' : ''} w-8 h-8 text-sm shadow-md" style="${!expired ? `background-color: ${dayColor};` : ''}">
+              ${i + 1}
+            </div>
+          `;
+          const evIcon = L.divIcon({
+            className: '',
+            html: evPinHtml,
+            iconSize: [32, 32],
+            iconAnchor: [16, 16]
+          });
+          const marker = L.marker([ev.lat, ev.lng], { icon: evIcon })
+            .bindPopup(`
+              <div>
+                <div class="font-black text-xs" style="color: ${dayColor};">【${formatDayHeader(dateKey).split(' ')[0]}】第 ${i + 1} 場</div>
+                <div class="font-black text-base">${escapeHtml(ev.title)}</div>
+                <div class="text-xs text-slate-600">${formatTimeOnly(ev.datetime)}</div>
+                <div class="text-xs text-slate-500">${escapeHtml(ev.location)}</div>
+              </div>
+            `);
+          markersLayer.addLayer(marker);
+
+          // 卡片 HTML
+          const cardClass = expired ? 'opacity-40 grayscale border-slate-300 bg-slate-100' : 'border-slate-200 bg-white shadow-sm';
+          allHtml += `
+            <div onclick="focusEvent(${ev.lat}, ${ev.lng})" class="rounded-2xl p-3.5 border-2 ${cardClass} cursor-pointer transition hover:border-orange-400">
+              <div class="flex items-start justify-between gap-2">
+                <div class="flex-1">
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <span class="w-6 h-6 rounded-full text-white font-black text-xs flex items-center justify-center shrink-0" style="background-color: ${dayColor};">
+                      ${i + 1}
+                    </span>
+                    <span class="text-lg font-black text-slate-900">${formatTimeOnly(ev.datetime)}</span>
+                    ${expired ? '<span class="text-xs bg-slate-300 text-slate-800 px-2 py-0.5 rounded font-black">已過期30分</span>' : ''}
+                  </div>
+                  <h3 class="text-lg font-black text-slate-900 mt-1">${escapeHtml(ev.title)}</h3>
+                  <p class="text-slate-600 text-xs md:text-sm font-bold mt-0.5">📍 ${escapeHtml(ev.location)}</p>
+                </div>
+
+                <!-- 戰利品有去打卡與刪除 -->
+                <div class="flex flex-col items-end gap-2 shrink-0" onclick="event.stopPropagation()">
+                  <button onclick="toggleAttendance('${ev.id}')"
+                    class="px-3 py-1.5 rounded-xl font-black text-xs shadow transition flex items-center gap-1 ${ev.attended ? 'bg-amber-400 text-amber-950 ring-2 ring-amber-500' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'}">
+                    <span>${ev.attended ? '✅ 已打卡(+30元)' : '⬜ 沒去'}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          `;
+
+          // 場次之間的步行距離與時間純資訊顯示 (不判斷趕不趕得上)
+          if (i < dayEvents.length - 1) {
+            const nextEv = dayEvents[i + 1];
+            const leg = legRoutes[i + (homePos ? 1 : 0)];
+            const distM = leg ? leg.distance : 0;
+            const walkMin = calcWalkMinutes(distM);
+
+            allHtml += `
+              <div class="my-1.5 bg-blue-50/90 border-2 border-dashed border-blue-200 rounded-xl p-2.5 text-xs md:text-sm font-bold flex items-center justify-between flex-wrap gap-2">
+                <div class="text-slate-800">
+                  <span>🚶 走到第 ${i + 2} 場：</span>
+                  <span class="text-blue-700 font-black">約 ${formatDistance(distM)}</span>
+                  <span class="text-slate-600 ml-1">(走路約 <b class="text-blue-800 text-sm">${walkMin}</b> 分鐘)</span>
+                </div>
+                <a href="https://www.google.com/maps/dir/?api=1&origin=${ev.lat},${ev.lng}&destination=${nextEv.lat},${nextEv.lng}&travelmode=walking" target="_blank"
+                  class="text-blue-600 hover:text-blue-800 font-bold underline text-xs shrink-0">
+                  Google 導航
+                </a>
+              </div>
+            `;
+          }
+        }
+
+        // 該日結束段：最後一場 ➔ 平安回家
+        if (homePos && legRoutes.length > 0) {
+          const returnLeg = legRoutes[legRoutes.length - 1];
+          const returnMin = calcWalkMinutes(returnLeg.distance);
+          allHtml += `
+            <div class="bg-emerald-50 border-2 border-dashed border-emerald-400 rounded-2xl p-2.5 text-xs md:text-sm font-bold flex items-center justify-between">
+              <div>
+                <span class="text-emerald-900 font-black">🏠 第 ${dayEvents.length} 場結束 ➔ 平安回家：</span>
+                <span class="text-emerald-800">約 <b>${formatDistance(returnLeg.distance)}</b> (走路約 <b>${returnMin}</b> 分鐘)</span>
+              </div>
+              <a href="https://www.google.com/maps/dir/?api=1&origin=${dayEvents[dayEvents.length - 1].lat},${dayEvents[dayEvents.length - 1].lng}&destination=${homePos.lat},${homePos.lng}&travelmode=walking" target="_blank"
+                class="text-xs bg-emerald-700 hover:bg-emerald-800 text-white font-black px-2.5 py-1.5 rounded-lg shrink-0 shadow">
+                回家的路
+              </a>
+            </div>
+          `;
+        }
+
+        allHtml += `</div>`; // 結束當天卡片群組
+      }
+
+      container.innerHTML = allHtml;
+      document.getElementById('routing-spinner').classList.add('hidden');
+
+      if (allBounds.length > 0) {
+        map.fitBounds(allBounds, { padding: [50, 50], maxZoom: 15 });
+      }
+    }
+
+    // 歷史紀錄處理
+    function toggleHistorySection() {
+      isHistoryExpanded = !isHistoryExpanded;
+      const list = document.getElementById('history-list');
+      const arrow = document.getElementById('history-arrow');
+      if (isHistoryExpanded) {
+        list.classList.remove('hidden');
+        arrow.textContent = '▲ 點擊收合';
+      } else {
+        list.classList.add('hidden');
+        arrow.textContent = '▼ 點擊展開';
+      }
+    }
+
+    function renderHistorySection(historyList) {
+      document.getElementById('history-badge').textContent = historyList.length;
+      const container = document.getElementById('history-list');
+
+      if (historyList.length === 0) {
+        container.innerHTML = `<div class="text-xs text-slate-500 font-bold p-2 text-center">尚無過去歷史紀錄</div>`;
+        return;
+      }
+
+      let html = '';
+      historyList.forEach(ev => {
+        html += `
+          <div class="bg-white rounded-xl p-2.5 border border-slate-300 text-xs font-bold flex items-center justify-between gap-2 opacity-75">
+            <div>
+              <div class="text-slate-500">${ev.datetime.replace('T', ' ')}</div>
+              <div class="font-black text-slate-800 text-sm">${escapeHtml(ev.title)}</div>
+              <div class="text-slate-500 truncate max-w-[200px]">📍 ${escapeHtml(ev.location)}</div>
+            </div>
+            <div class="flex items-center gap-2">
+              <button onclick="toggleAttendance('${ev.id}')"
+                class="px-2.5 py-1 rounded-lg text-xs font-black ${ev.attended ? 'bg-amber-400 text-amber-950' : 'bg-slate-200 text-slate-600'}">
+                ${ev.attended ? '✅ 有去(+30元)' : '⬜ 沒去'}
+              </button>
+            </div>
+          </div>
+        `;
+      });
+
+      container.innerHTML = html;
+    }
+
+    function formatDistance(m) {
+      const rounded = Math.round(m);
+      return rounded >= 1000 ? (rounded / 1000).toFixed(1) + ' 公里' : rounded + ' 公尺';
+    }
+
+    function focusEvent(lat, lng) {
+      if (map) map.setView([lat, lng], 16);
+    }
+
+    function getStraightDistance(lat1, lon1, lat2, lon2) {
+      const R = 6371e3;
+      const φ1 = lat1 * Math.PI / 180;
+      const φ2 = lat2 * Math.PI / 180;
+      const Δφ = (lat2 - lat1) * Math.PI / 180;
+      const Δλ = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
+                Math.cos(φ1) * Math.cos(φ2) *
+                Math.sin(Δλ/2) * Math.sin(Δλ/2);
+      return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
+    }
+
+    function showMsg(txt) {
+      const box = document.getElementById('msg-box');
+      box.textContent = txt;
+      box.classList.remove('opacity-0');
+      clearTimeout(window.msgTimer);
+      window.msgTimer = setTimeout(() => {
+        box.classList.add('opacity-0');
+      }, 2600);
+    }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str).replace(/[&<>'"]/g, t => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
+      }[t] || t));
+    }
+  </script>
+</body>
+</html>
