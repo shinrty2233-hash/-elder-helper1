@@ -97,7 +97,7 @@
         </div>
         
         <div class="flex gap-1.5">
-          <input type="text" id="ipt-home" placeholder="輸入家裡地址或點擊右側地圖"
+          <input type="text" id="ipt-home" placeholder="輸入地址、地標，或點擊地圖"
             class="flex-1 p-2.5 bg-white border border-emerald-300 rounded-xl text-sm font-bold focus:border-emerald-600 outline-none">
           <button type="button" onclick="searchHomeAddress()" class="px-3 py-2 bg-emerald-800 hover:bg-emerald-900 text-white text-xs font-black rounded-xl shrink-0">
             搜尋
@@ -134,7 +134,7 @@
               <span class="text-xs text-orange-600 font-bold">可打字或點右邊地圖</span>
             </div>
             <div class="flex gap-1.5">
-              <input type="text" id="ipt-location" required placeholder="輸入地點或點右邊地圖選點"
+              <input type="text" id="ipt-location" required placeholder="地址、地標、座標，或貼 Google 地圖網址"
                 class="flex-1 p-2.5 bg-slate-50 border border-slate-300 rounded-xl text-base font-bold focus:border-orange-500 focus:bg-white outline-none">
               <button type="button" onclick="searchEventAddress()" class="px-3 py-2 bg-slate-800 hover:bg-slate-900 text-white font-black rounded-xl text-xs shrink-0">
                 搜尋
@@ -252,13 +252,38 @@
       document.getElementById('ipt-datetime').value = `${year}-${month}-${day}T${hours}:${mins}`;
     }
 
+    // 搜尋輔助：支援直接貼座標 / Google 地圖網址，找不到時加上「桃園市」再試一次
+    function parseLatLng(q) {
+      const m = q.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/) || q.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/) || q.match(/^\s*(-?\d{1,2}\.\d+)\s*[,，\s]\s*(-?\d{2,3}\.\d+)\s*$/);
+      if (!m) return null;
+      const lat = parseFloat(m[1]), lng = parseFloat(m[2]);
+      return (lat > 21 && lat < 26 && lng > 119 && lng < 123) ? { lat, lng } : null;
+    }
+    async function geocode(q) {
+      const p = parseLatLng(q);
+      if (p) return p;
+      for (const query of [q, '桃園市 ' + q]) {
+        const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&countrycodes=tw&limit=1&viewbox=120.9,25.2,121.5,24.7&accept-language=zh-TW`);
+        const data = await res.json();
+        if (data && data.length) return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+      }
+      return null;
+    }
+
     // 地圖初始化
     function initMap() {
       map = L.map('map', { zoomControl: true }).setView([24.9654, 121.2250], 14);
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19,
-        attribution: '&copy; OpenStreetMap'
+      // 主圖資：內政部國土測繪中心 通用版電子地圖（台灣在地、較新）；連續載入失敗就自動改用 OpenStreetMap
+      const nlsc = L.tileLayer('https://wmts.nlsc.gov.tw/wmts/EMAP/default/GoogleMapsCompatible/{z}/{y}/{x}', {
+        maxZoom: 19, attribution: '&copy; 內政部國土測繪中心'
       }).addTo(map);
+      let tileErr = 0;
+      nlsc.on('tileerror', () => {
+        if (++tileErr === 6) {
+          map.removeLayer(nlsc);
+          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(map);
+        }
+      });
 
       routesLayer = L.layerGroup().addTo(map);
       markersLayer = L.layerGroup().addTo(map);
@@ -361,11 +386,9 @@
       if (!q) return;
       showMsg('🔍 搜尋家裡地址中...');
       try {
-        const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&countrycodes=tw&limit=1`);
-        const data = await res.json();
-        if (data && data.length > 0) {
-          const lat = parseFloat(data[0].lat);
-          const lng = parseFloat(data[0].lon);
+        const pt = await geocode(q);
+        if (pt) {
+          const { lat, lng } = pt;
           setHomePosition(lat, lng, q);
           map.setView([lat, lng], 15);
           showMsg('✅ 起點地址已設定！');
@@ -396,11 +419,9 @@
       }
       showMsg('🔍 搜尋地點中...');
       try {
-        const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&countrycodes=tw&limit=1`);
-        const data = await res.json();
-        if (data && data.length > 0) {
-          const lat = parseFloat(data[0].lat);
-          const lng = parseFloat(data[0].lon);
+        const pt = await geocode(q);
+        if (pt) {
+          const { lat, lng } = pt;
           setEventFormLocation(lat, lng, q);
           map.setView([lat, lng], 15);
           showMsg('✅ 找到地點！');
