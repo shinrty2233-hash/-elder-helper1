@@ -646,6 +646,17 @@
           `;
         }
 
+        // 找出「同時間」或「兩場之間來不及走過去」的場次
+        const clash = dayEvents.map((ev, i) => {
+          if (i === dayEvents.length - 1) return null;
+          const gap = Math.round((new Date(dayEvents[i + 1].datetime) - new Date(ev.datetime)) / 60000);
+          const lg = legRoutes[i + (homePos ? 1 : 0)];
+          const walk = calcWalkMinutes(lg ? lg.distance : 0);
+          if (gap <= 0) return { gap, walk, same: true };
+          if (gap < walk) return { gap, walk, same: false };
+          return null;
+        });
+
         // 繪製該日各場次卡片與 Pin
         for (let i = 0; i < dayEvents.length; i++) {
           const ev = dayEvents[i];
@@ -687,6 +698,7 @@
                     </span>
                     <span class="text-lg font-black text-slate-900">${formatTimeOnly(ev.datetime)}</span>
                     ${expired ? '<span class="text-xs bg-slate-300 text-slate-800 px-2 py-0.5 rounded font-black">已過期30分</span>' : ''}
+                    ${(clash[i] || (i > 0 && clash[i - 1])) ? '<span class="text-xs bg-amber-300 text-amber-950 px-2 py-0.5 rounded font-black">⚠️ 時間衝突</span>' : ''}
                   </div>
                   <h3 class="text-lg font-black text-slate-900 mt-1">${escapeHtml(ev.title)}</h3>
                   <p class="text-slate-600 text-xs md:text-sm font-bold mt-0.5">📍 ${escapeHtml(ev.location)}</p>
@@ -709,6 +721,17 @@
             const leg = legRoutes[i + (homePos ? 1 : 0)];
             const distM = leg ? leg.distance : 0;
             const walkMin = calcWalkMinutes(distM);
+
+            if (clash[i]) {
+              const c = clash[i];
+              allHtml += `
+                <div class="my-1.5 bg-amber-100 border-2 border-amber-400 rounded-xl p-2.5 text-xs md:text-sm font-black text-amber-900">
+                  ${c.same
+                    ? `⚠️ 第 ${i + 1}、${i + 2} 場是同一時間開始，只能擇一前往`
+                    : `⚠️ 第 ${i + 1}、${i + 2} 場只差 ${c.gap} 分鐘，走路就要約 ${c.walk} 分鐘，兩場來不及都去`}
+                </div>
+              `;
+            }
 
             allHtml += `
               <div class="my-1.5 bg-blue-50/90 border-2 border-dashed border-blue-200 rounded-xl p-2.5 text-xs md:text-sm font-bold flex items-center justify-between flex-wrap gap-2">

@@ -123,9 +123,11 @@
           </div>
 
           <div>
-            <label class="block text-sm font-black mb-1 text-slate-800">2. 活動時間 (開放未來日期)</label>
-            <input type="datetime-local" id="ipt-datetime" required
-              class="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-xl text-base font-bold focus:border-orange-500 focus:bg-white outline-none">
+            <label class="block text-sm font-black mb-1 text-slate-800">2. 活動日期與時間（每 30 分鐘一格）</label>
+            <div class="flex gap-2">
+              <input type="date" id="ipt-date" required class="flex-1 min-w-0 p-2.5 bg-slate-50 border border-slate-300 rounded-xl text-base font-bold focus:border-orange-500 focus:bg-white outline-none">
+              <select id="ipt-time" class="w-28 shrink-0 p-2.5 bg-slate-50 border border-slate-300 rounded-xl text-base font-bold focus:border-orange-500 focus:bg-white outline-none"></select>
+            </div>
           </div>
 
           <div>
@@ -243,13 +245,26 @@
     }
 
     function setDefaultFormTime() {
+      const sel = document.getElementById('ipt-time');
+      if (!sel.options.length) {
+        let h = '';
+        for (let m = 6 * 60; m <= 21 * 60 + 30; m += 30) {
+          const t = String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
+          h += `<option value="${t}">${t}</option>`;
+        }
+        sel.innerHTML = h;
+      }
       const now = new Date(Date.now() + 30 * 60000);
-      const year = now.getFullYear();
-      const month = String(now.getMonth() + 1).padStart(2, '0');
-      const day = String(now.getDate()).padStart(2, '0');
-      const hours = String(now.getHours()).padStart(2, '0');
-      const mins = String(now.getMinutes()).padStart(2, '0');
-      document.getElementById('ipt-datetime').value = `${year}-${month}-${day}T${hours}:${mins}`;
+      const dateEl = document.getElementById('ipt-date');
+      if (!dateEl.value) {
+        dateEl.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      }
+      let mins = now.getHours() * 60 + (now.getMinutes() > 30 ? 60 : (now.getMinutes() > 0 ? 30 : 0));
+      if (mins < 6 * 60 || mins > 21 * 60 + 30) mins = 9 * 60;
+      sel.value = String(Math.floor(mins / 60)).padStart(2, '0') + ':' + String(mins % 60).padStart(2, '0');
+    }
+    function getFormDatetime() {
+      return document.getElementById('ipt-date').value + 'T' + document.getElementById('ipt-time').value;
     }
 
     // 搜尋輔助：支援直接貼座標 / Google 地圖網址，找不到時加上「桃園市」再試一次
@@ -492,7 +507,7 @@
     function addEvent(e) {
       e.preventDefault();
       const title = document.getElementById('ipt-title').value.trim();
-      const datetime = document.getElementById('ipt-datetime').value;
+      const datetime = getFormDatetime();
       const location = document.getElementById('ipt-location').value.trim();
       let lat = parseFloat(document.getElementById('ipt-lat').value);
       let lng = parseFloat(document.getElementById('ipt-lng').value);
@@ -502,6 +517,7 @@
         return;
       }
 
+      const sameCnt = events.filter(x => x.datetime === datetime).length;
       events.push({
         id: 'ev_' + Date.now(),
         title,
@@ -519,7 +535,7 @@
       document.getElementById('ipt-lng').value = '';
       if (tempPickerMarker) map.removeLayer(tempPickerMarker);
 
-      showMsg('🎉 活動已加入行程！');
+      showMsg(sameCnt ? `🎉 已加入。⚠️ 同時間已有 ${sameCnt} 場，長輩只能擇一` : '🎉 活動已加入行程！');
       renderAll();
     }
 
@@ -772,6 +788,17 @@
           `;
         }
 
+        // 找出「同時間」或「兩場之間來不及走過去」的場次
+        const clash = dayEvents.map((ev, i) => {
+          if (i === dayEvents.length - 1) return null;
+          const gap = Math.round((new Date(dayEvents[i + 1].datetime) - new Date(ev.datetime)) / 60000);
+          const lg = legRoutes[i + (homePos ? 1 : 0)];
+          const walk = calcWalkMinutes(lg ? lg.distance : 0);
+          if (gap <= 0) return { gap, walk, same: true };
+          if (gap < walk) return { gap, walk, same: false };
+          return null;
+        });
+
         // 繪製該日各場次卡片與 Pin
         for (let i = 0; i < dayEvents.length; i++) {
           const ev = dayEvents[i];
@@ -813,6 +840,7 @@
                     </span>
                     <span class="text-lg font-black text-slate-900">${formatTimeOnly(ev.datetime)}</span>
                     ${expired ? '<span class="text-xs bg-slate-300 text-slate-800 px-2 py-0.5 rounded font-black">已過期30分</span>' : ''}
+                    ${(clash[i] || (i > 0 && clash[i - 1])) ? '<span class="text-xs bg-amber-300 text-amber-950 px-2 py-0.5 rounded font-black">⚠️ 時間衝突</span>' : ''}
                   </div>
                   <h3 class="text-lg font-black text-slate-900 mt-1">${escapeHtml(ev.title)}</h3>
                   <p class="text-slate-600 text-xs md:text-sm font-bold mt-0.5">📍 ${escapeHtml(ev.location)}</p>
@@ -838,6 +866,17 @@
             const leg = legRoutes[i + (homePos ? 1 : 0)];
             const distM = leg ? leg.distance : 0;
             const walkMin = calcWalkMinutes(distM);
+
+            if (clash[i]) {
+              const c = clash[i];
+              allHtml += `
+                <div class="my-1.5 bg-amber-100 border-2 border-amber-400 rounded-xl p-2.5 text-xs md:text-sm font-black text-amber-900">
+                  ${c.same
+                    ? `⚠️ 第 ${i + 1}、${i + 2} 場是同一時間開始，只能擇一前往`
+                    : `⚠️ 第 ${i + 1}、${i + 2} 場只差 ${c.gap} 分鐘，走路就要約 ${c.walk} 分鐘，兩場來不及都去`}
+                </div>
+              `;
+            }
 
             allHtml += `
               <div class="my-1.5 bg-blue-50/90 border-2 border-dashed border-blue-200 rounded-xl p-2.5 text-xs md:text-sm font-bold flex items-center justify-between flex-wrap gap-2">
