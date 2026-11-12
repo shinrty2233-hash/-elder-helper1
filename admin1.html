@@ -35,8 +35,9 @@
       background-color: #94a3b8 !important;
     }
     #map {
-      min-height: 320px;
+      min-height: 0;
     }
+    .mapbig { height: 70vh !important; }
     @media (min-width: 1024px) {
       #map {
         min-height: 100%;
@@ -82,7 +83,7 @@
   </header>
 
   <!-- 主內容區 -->
-  <main class="flex-1 max-w-7xl w-full mx-auto p-3 md:p-5 flex flex-col lg:flex-row gap-5 overflow-hidden">
+  <main class="flex-1 max-w-7xl w-full mx-auto p-3 md:p-5 flex flex-col lg:flex-row gap-5 overflow-visible lg:overflow-hidden">
     
     <!-- 左側欄：控制項、表單、行程動線與歷史清單 -->
     <div class="w-full lg:w-5/12 flex flex-col gap-4 overflow-y-auto pr-0 lg:pr-1">
@@ -148,9 +149,9 @@
           <input type="hidden" id="ipt-lat" value="">
           <input type="hidden" id="ipt-lng" value="">
 
-          <button type="submit" class="w-full py-3 bg-orange-600 hover:bg-orange-700 text-white font-black text-lg rounded-xl shadow-md transition">
-            ＋ 新增活動到行程
-          </button>
+          <div id="edit-banner" class="hidden bg-amber-100 border-2 border-amber-400 text-amber-900 rounded-xl p-2 text-sm font-black">✏️ 正在修改既有活動（改完按下方「儲存修改」）</div>
+          <button id="btn-submit-event" type="submit" class="w-full py-3 bg-orange-600 hover:bg-orange-700 text-white font-black text-lg rounded-xl shadow-md transition">＋ 新增活動到行程</button>
+          <button id="btn-cancel-edit" type="button" onclick="cancelEdit()" class="hidden w-full py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-800 font-black rounded-xl">取消修改</button>
         </form>
       </section>
 
@@ -183,16 +184,18 @@
     </div>
 
     <!-- 右側欄：大地圖 (各天專用顏色、畫出當天完整回家路線) -->
-    <div class="w-full lg:w-7/12 flex flex-col h-[420px] lg:h-auto rounded-3xl overflow-hidden border-2 border-slate-300 shadow-md relative bg-white">
+    <div class="w-full lg:w-7/12 flex flex-col order-first lg:order-none sticky top-1 z-30 lg:static h-[36vh] min-h-[220px] lg:h-auto rounded-2xl lg:rounded-3xl overflow-hidden border-2 border-slate-300 shadow-lg relative bg-white">
       <div id="map" class="w-full h-full z-10"></div>
 
       <!-- 地圖圖例與天數線條顏色標記 -->
-      <div id="map-legend" class="absolute top-3 right-3 z-[400] bg-white/95 backdrop-blur-sm p-3 rounded-xl border border-slate-200 shadow text-xs space-y-1.5 font-bold pointer-events-none max-w-[210px]">
+      <div id="map-legend" class="absolute top-3 right-3 z-[400] bg-white/95 backdrop-blur-sm p-1.5 lg:p-3 rounded-xl border border-slate-200 shadow text-[10px] lg:text-xs space-y-1 font-bold pointer-events-none max-w-[130px] lg:max-w-[210px]">
         <div class="flex items-center gap-1.5"><span class="w-3.5 h-3.5 rounded-full bg-emerald-600 inline-block"></span> 綠色：起點與家 🏠</div>
         <div id="legend-days" class="space-y-1 pt-1 border-t border-slate-200">
           <!-- 動態產生各天線條顏色說明 -->
         </div>
       </div>
+
+      <button id="btn-map-size" onclick="toggleMapSize()" class="lg:hidden absolute bottom-3 right-3 z-[400] bg-white/95 border border-slate-300 rounded-xl px-3 py-2 text-sm font-black shadow">⤢ 放大地圖</button>
 
       <!-- 路線計算狀態指示條 -->
       <div id="routing-spinner" class="absolute bottom-3 left-3 z-[400] bg-slate-900/90 text-white text-xs px-3 py-1.5 rounded-xl font-bold flex items-center gap-2 hidden shadow">
@@ -285,6 +288,38 @@
       return null;
     }
 
+    // 用經緯度反查「中文地址」：行政區＋路名＋門牌（有店名／地標時一併顯示）
+    async function reverseName(lat, lng) {
+      try {
+        const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1&accept-language=zh-TW`);
+        const d = await res.json();
+        const a = d.address || {};
+        const district = a.city_district || a.suburb || a.town || a.county || '';
+        const road = a.road || '';
+        const num = a.house_number ? a.house_number + '號' : '';
+        const addr = road ? (district + road + num) : (district + (a.neighbourhood || a.village || ''));
+        const poi = (d.name && !/^\d/.test(d.name) && d.name !== road) ? d.name : '';
+        if (poi) return addr ? `${poi}（${addr}）` : poi;
+        return addr || null;
+      } catch (e) { return null; }
+    }
+
+    // 排序：先依日期；同一天內若有手動排過順序(seq)就照 seq，否則依時間
+    function evCmp(a, b) {
+      const da = getDateKey(a.datetime), db = getDateKey(b.datetime);
+      if (da !== db) return da < db ? -1 : 1;
+      if (a.seq != null && b.seq != null) return a.seq - b.seq;
+      return new Date(a.datetime) - new Date(b.datetime);
+    }
+
+    // 手機版：地圖放大 / 縮小
+    function toggleMapSize() {
+      const w = document.getElementById('map').parentElement;
+      const big = w.classList.toggle('mapbig');
+      document.getElementById('btn-map-size').textContent = big ? '⤡ 縮小地圖' : '⤢ 放大地圖';
+      setTimeout(() => map && map.invalidateSize(), 250);
+    }
+
     // 地圖初始化
     function initMap() {
       map = L.map('map', { zoomControl: true }).setView([24.9654, 121.2250], 14);
@@ -303,47 +338,55 @@
       routesLayer = L.layerGroup().addTo(map);
       markersLayer = L.layerGroup().addTo(map);
 
-      map.on('click', async (e) => {
+      map.on('click', (e) => {
         const { lat, lng } = e.latlng;
         let placeName = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
-        try {
-          const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`);
-          const data = await res.json();
-          if (data?.display_name) placeName = data.display_name.split(',')[0];
-        } catch (err) {}
+        const canPickEvent = !!document.getElementById('ipt-location');
 
-        const popupContent = document.createElement('div');
-        popupContent.className = 'p-1 text-center space-y-2';
-        popupContent.innerHTML = `
-          <div class="font-black text-sm text-slate-800">${escapeHtml(placeName)}</div>
-          <div class="flex gap-2">
-            <button id="btn-pick-home" class="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg shadow">
-              🏠 設為出發起點(家)
-            </button>
-            <button id="btn-pick-event" class="px-2.5 py-1.5 bg-orange-600 hover:bg-orange-700 text-white text-xs font-bold rounded-lg shadow">
-              📍 設為活動地點
-            </button>
-          </div>
-        `;
+        // 先立刻開啟泡泡，地址在背景查詢（不用等網路）
+        const box = document.createElement('div');
+        box.style.minWidth = '190px';
+        box.style.textAlign = 'center';
+        const nameEl = document.createElement('div');
+        nameEl.className = 'font-black text-sm text-slate-800';
+        nameEl.textContent = '📍 查詢地址中…';
+        box.appendChild(nameEl);
 
-        L.popup()
-          .setLatLng([lat, lng])
-          .setContent(popupContent)
-          .openOn(map);
-
-        setTimeout(() => {
-          document.getElementById('btn-pick-home')?.addEventListener('click', () => {
-            setHomePosition(lat, lng, placeName);
-            map.closePopup();
-            showMsg('🏠 已更新出發起點 (家)！');
-          });
-
-          document.getElementById('btn-pick-event')?.addEventListener('click', () => {
+        const mkBtn = (label, color, handler) => {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.textContent = label;
+          b.style.cssText = `display:block;width:100%;margin-top:8px;padding:13px 8px;border-radius:12px;background:${color};color:#fff;font-weight:900;font-size:15px;border:0;`;
+          b.addEventListener('click', (ev) => { ev.stopPropagation(); handler(); });
+          box.appendChild(b);
+        };
+        if (canPickEvent) {
+          mkBtn('📍 設為活動地點', '#ea580c', () => {
             setEventFormLocation(lat, lng, placeName);
             map.closePopup();
-            showMsg('📍 已填入活動地點！');
+            showMsg('📍 已填入活動地點，請看上方表單');
           });
-        }, 50);
+        }
+        mkBtn('🏠 設為出發起點(家)', '#059669', () => {
+          setHomePosition(lat, lng, placeName);
+          map.closePopup();
+          showMsg('🏠 已更新出發起點 (家)！');
+        });
+        L.DomEvent.disableClickPropagation(box);
+        L.popup({ minWidth: 200 }).setLatLng(e.latlng).setContent(box).openOn(map);
+
+        reverseName(lat, lng).then(n => {
+          const old = placeName;
+          if (n) placeName = n;
+          nameEl.textContent = placeName;
+          // 若使用者已先按了按鈕（還是座標），補上查到的地址
+          const loc = document.getElementById('ipt-location');
+          if (n && loc && loc.value === old && document.getElementById('ipt-lat').value == lat) {
+            loc.value = n;
+            const hint = document.getElementById('geo-hint');
+            if (hint) hint.textContent = `📍 已選擇：${n}`;
+          }
+        });
       });
     }
 
@@ -424,6 +467,7 @@
       if (tempPickerMarker) map.removeLayer(tempPickerMarker);
       tempPickerMarker = L.marker([lat, lng]).addTo(map);
       document.getElementById('geo-hint').textContent = `📍 已選擇：${label}`;
+      document.getElementById('quick-form').scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
 
     async function searchEventAddress() {
@@ -517,6 +561,17 @@
         return;
       }
 
+      if (editingId) {
+        const cur = events.find(x => x.id === editingId);
+        if (cur) {
+          const oldDk = getDateKey(cur.datetime), newDk = getDateKey(datetime);
+          Object.assign(cur, { title, datetime, location, lat, lng });
+          if (oldDk !== newDk) delete cur.seq;
+          fixDaySeq(newDk); fixDaySeq(oldDk);
+        }
+        saveEvents(); cancelEdit(); showMsg('💾 已儲存修改'); renderAll();
+        return;
+      }
       const sameCnt = events.filter(x => x.datetime === datetime).length;
       events.push({
         id: 'ev_' + Date.now(),
@@ -527,6 +582,7 @@
         lng,
         attended: false
       });
+      fixDaySeq(getDateKey(datetime));
 
       saveEvents();
       document.getElementById('ipt-title').value = '';
@@ -540,6 +596,7 @@
     }
 
     function deleteEvent(id) {
+      if (!window.confirm('確定要刪除這場活動嗎？')) return;
       events = events.filter(e => e.id !== id);
       saveEvents();
       renderAll();
@@ -655,7 +712,7 @@
       updatePrizeSummary();
 
       // 先將活動依時間排序
-      events.sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
+      events.sort(evCmp);
 
       // 分離「今日與未來行程」與「跨日已過去的歷史活動」
       const activeEvents = [];
@@ -675,6 +732,7 @@
       routesLayer.clearLayers();
 
       const allBounds = [];
+      const pinGroups = [];
 
       // 繪製家 🏠
       if (homePos) {
@@ -740,6 +798,7 @@
               <span class="text-xs font-black bg-white px-2.5 py-1 rounded-full border shadow-sm" style="color: ${dayColor};">
                 共 ${dayEvents.length} 場次
               </span>
+              ${dayEvents.some(x => x.seq != null) ? `<button onclick="resetDayOrder('${dateKey}')" class="text-xs font-black bg-amber-100 text-amber-900 px-2.5 py-1 rounded-full border border-amber-300">↺ 改回依時間排序</button>` : ''}
             </div>
         `;
 
@@ -794,8 +853,8 @@
           const gap = Math.round((new Date(dayEvents[i + 1].datetime) - new Date(ev.datetime)) / 60000);
           const lg = legRoutes[i + (homePos ? 1 : 0)];
           const walk = calcWalkMinutes(lg ? lg.distance : 0);
-          if (gap <= 0) return { gap, walk, same: true };
-          if (gap < walk) return { gap, walk, same: false };
+          if (gap === 0) return { gap, walk, same: true };
+          if (gap > 0 && gap < walk) return { gap, walk, same: false };
           return null;
         });
 
@@ -805,28 +864,12 @@
           const expired = isEventExpired(ev.datetime);
           allBounds.push([ev.lat, ev.lng]);
 
-          // 地圖 Pin
-          const evPinHtml = `
-            <div class="num-pin ${expired ? 'expired' : ''} w-8 h-8 text-sm shadow-md" style="${!expired ? `background-color: ${dayColor};` : ''}">
-              ${i + 1}
-            </div>
-          `;
-          const evIcon = L.divIcon({
-            className: '',
-            html: evPinHtml,
-            iconSize: [32, 32],
-            iconAnchor: [16, 16]
-          });
-          const marker = L.marker([ev.lat, ev.lng], { icon: evIcon })
-            .bindPopup(`
-              <div>
-                <div class="font-black text-xs" style="color: ${dayColor};">【${formatDayHeader(dateKey).split(' ')[0]}】第 ${i + 1} 場</div>
-                <div class="font-black text-base">${escapeHtml(ev.title)}</div>
-                <div class="text-xs text-slate-600">${formatTimeOnly(ev.datetime)}</div>
-                <div class="text-xs text-slate-500">${escapeHtml(ev.location)}</div>
-              </div>
-            `);
-          markersLayer.addLayer(marker);
+          // 地圖 Pin：同地點的多場次合併成一個圖釘，避免數字重疊
+          {
+            let grp = pinGroups.find(g => Math.abs(g.lat - ev.lat) < 0.0006 && Math.abs(g.lng - ev.lng) < 0.0006);
+            if (!grp) { grp = { lat: ev.lat, lng: ev.lng, items: [] }; pinGroups.push(grp); }
+            grp.items.push({ ev, i, dayColor, dateKey, expired });
+          }
 
           // 卡片 HTML
           const cardClass = expired ? 'opacity-40 grayscale border-slate-300 bg-slate-100' : 'border-slate-200 bg-white shadow-sm';
@@ -852,10 +895,14 @@
                     class="px-3 py-1.5 rounded-xl font-black text-xs shadow transition flex items-center gap-1 ${ev.attended ? 'bg-amber-400 text-amber-950 ring-2 ring-amber-500' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'}">
                     <span>${ev.attended ? '✅ 已打卡(+30元)' : '⬜ 沒去'}</span>
                   </button>
-                  <button onclick="deleteEvent('${ev.id}')" class="text-xs text-slate-400 hover:text-rose-600 font-bold px-1">
-                    刪除
-                  </button>
                 </div>
+              </div>
+              <div class="flex flex-wrap gap-2 mt-3 pt-3 border-t border-slate-200" onclick="event.stopPropagation()">
+                ${dayEvents.length > 1 ? `
+                  <button onclick="moveEvent('${ev.id}', -1)" class="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 rounded-xl text-sm font-black text-slate-800">↑ 上移</button>
+                  <button onclick="moveEvent('${ev.id}', 1)" class="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 rounded-xl text-sm font-black text-slate-800">↓ 下移</button>` : ''}
+                <button onclick="startEdit('${ev.id}')" class="px-3.5 py-2 bg-sky-100 hover:bg-sky-200 rounded-xl text-sm font-black text-sky-900">✏️ 編輯</button>
+                <button onclick="deleteEvent('${ev.id}')" class="ml-auto px-3.5 py-2 bg-rose-50 hover:bg-rose-100 rounded-xl text-sm font-black text-rose-700">🗑 刪除</button>
               </div>
             </div>
           `;
@@ -914,6 +961,27 @@
 
         allHtml += `</div>`; // 結束當天卡片群組
       }
+
+      // 繪製活動圖釘（同地點多場次 → 並排小圓點 + 一個泡泡列出全部）
+      pinGroups.forEach(g => {
+        const shown = g.items.slice(0, 4);
+        const chips = shown.map(it => `<div class="num-pin ${it.expired ? 'expired' : ''}" style="width:32px;height:32px;font-size:14px;margin-right:-4px;flex-shrink:0;${!it.expired ? `background-color:${it.dayColor};` : ''}">${it.i + 1}</div>`).join('')
+          + (g.items.length > 4 ? `<div class="num-pin" style="width:32px;height:32px;font-size:12px;background:#475569;flex-shrink:0;">+${g.items.length - 4}</div>` : '');
+        const n = shown.length + (g.items.length > 4 ? 1 : 0);
+        const w = n * 28 + 8;
+        const icon = L.divIcon({
+          className: '',
+          html: `<div style="display:flex;align-items:center;width:${w}px;">${chips}</div>`,
+          iconSize: [w, 32],
+          iconAnchor: [w / 2, 16]
+        });
+        const popupHtml = g.items.map(it => `
+          <div style="margin-bottom:8px;">
+            <div class="font-black text-xs" style="color:${it.dayColor};">【${formatDayHeader(it.dateKey).split(' ')[0]}】第 ${it.i + 1} 場　${formatTimeOnly(it.ev.datetime)}</div>
+            <div class="font-black text-base">${escapeHtml(it.ev.title)}</div>
+          </div>`).join('') + `<div class="text-xs text-slate-500">${escapeHtml(g.items[0].ev.location)}</div>`;
+        markersLayer.addLayer(L.marker([g.lat, g.lng], { icon }).bindPopup(popupHtml));
+      });
 
       container.innerHTML = allHtml;
       document.getElementById('routing-spinner').classList.add('hidden');
@@ -1009,11 +1077,78 @@
       }[t] || t));
     }
 
+    // ===== 排序、編輯 =====
+    let editingId = null;
+
+    // 若某天已手動排過順序，新增 / 改時間的活動依時間插入，保持順序完整
+    function fixDaySeq(dk) {
+      const day = events.filter(e => getDateKey(e.datetime) === dk);
+      if (!day.some(e => e.seq != null)) return;
+      const arr = day.filter(e => e.seq != null).sort((a, b) => a.seq - b.seq);
+      day.filter(e => e.seq == null).sort((a, b) => new Date(a.datetime) - new Date(b.datetime)).forEach(n => {
+        let idx = arr.findIndex(x => new Date(x.datetime) > new Date(n.datetime));
+        if (idx < 0) idx = arr.length;
+        arr.splice(idx, 0, n);
+      });
+      arr.forEach((e, k) => e.seq = k);
+    }
+    function moveEvent(id, dir) {
+      const ev = events.find(e => e.id === id);
+      if (!ev) return;
+      const dk = getDateKey(ev.datetime);
+      const day = events.filter(e => getDateKey(e.datetime) === dk).sort(evCmp);
+      const idx = day.findIndex(e => e.id === id);
+      const j = idx + dir;
+      if (j < 0 || j >= day.length) { showMsg(dir < 0 ? '已經是第一場了' : '已經是最後一場了'); return; }
+      [day[idx], day[j]] = [day[j], day[idx]];
+      day.forEach((e, k) => e.seq = k);
+      saveEvents(); renderAll();
+    }
+    function resetDayOrder(dk) {
+      events.forEach(e => { if (getDateKey(e.datetime) === dk) delete e.seq; });
+      saveEvents(); renderAll(); showMsg('已改回依時間排序');
+    }
+    function clearEventForm() {
+      ['ipt-title', 'ipt-location', 'ipt-lat', 'ipt-lng'].forEach(id => document.getElementById(id).value = '');
+      if (tempPickerMarker) { map.removeLayer(tempPickerMarker); tempPickerMarker = null; }
+    }
+    function startEdit(id) {
+      const ev = events.find(e => e.id === id);
+      if (!ev) return;
+      editingId = id;
+      setEventFormLocation(ev.lat, ev.lng, ev.location);
+      document.getElementById('ipt-title').value = ev.title;
+      document.getElementById('ipt-date').value = ev.datetime.slice(0, 10);
+      const t = ev.datetime.slice(11, 16);
+      const sel = document.getElementById('ipt-time');
+      sel.querySelectorAll('option[data-temp]').forEach(o => o.remove());
+      if (![...sel.options].some(o => o.value === t)) {
+        const o = document.createElement('option');
+        o.value = t; o.textContent = t; o.dataset.temp = '1';
+        sel.appendChild(o);
+      }
+      sel.value = t;
+      document.getElementById('edit-banner').classList.remove('hidden');
+      document.getElementById('btn-cancel-edit').classList.remove('hidden');
+      document.getElementById('btn-submit-event').textContent = '💾 儲存修改';
+      map.setView([ev.lat, ev.lng], 16);
+      showMsg('✏️ 已帶入表單，改完按「儲存修改」');
+    }
+    function cancelEdit() {
+      editingId = null;
+      clearEventForm();
+      document.getElementById('ipt-time').querySelectorAll('option[data-temp]').forEach(o => o.remove());
+      document.getElementById('edit-banner').classList.add('hidden');
+      document.getElementById('btn-cancel-edit').classList.add('hidden');
+      document.getElementById('btn-submit-event').textContent = '＋ 新增活動到行程';
+      setDefaultFormTime();
+    }
+
     // ===== 編輯版專用：匯出 / 匯入 events.json =====
     function exportEventsJson() {
       const out = {
         updated: new Date().toLocaleString('zh-TW', { hour12: false }),
-        events: events.map(e => ({ id: e.id, title: e.title, datetime: e.datetime, location: e.location, lat: e.lat, lng: e.lng }))
+        events: events.map(e => ({ id: e.id, title: e.title, datetime: e.datetime, location: e.location, lat: e.lat, lng: e.lng, seq: e.seq }))
       };
       const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
       const a = document.createElement('a');
